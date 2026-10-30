@@ -146,6 +146,13 @@ export BUNDLE_DIR=/tmp/causalagent-2026.10.16-0b79676-38870125961-1/bundle
 export RELEASES_DIR=/opt/causalagent-staging/releases
 ```
 
+从 manifest 读取发布 ID，并确认目标目录尚不存在，避免部署脚本向旧目录叠加复制文件：
+
+```Plain Text
+RELEASE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release_id"])' "$BUNDLE_DIR/release.manifest.json")"
+test ! -e "$RELEASES_DIR/$RELEASE_ID" || { echo "release directory already exists: $RELEASE_ID" >&2; exit 1; }
+```
+
 创建发布目录：
 
 ```Plain Text
@@ -160,6 +167,15 @@ test -f "$BUNDLE_DIR/docker-compose.staging.yml" && echo "staging compose OK"
 test -r "$CAUSALAGENT_CONFIG_FILE" && echo "config OK"
 test -r "$CAUSALAGENT_SECRET_FILE" && echo "secret OK"
 ```
+
+部署前记录旧版本的实际路径；部署脚本会在 Compose 启动命令成功后更新 `current`，这早于下面的运行状态验收：
+
+```Plain Text
+PREVIOUS_RELEASE="$(readlink -f "$RELEASES_DIR/current")"
+test -d "$PREVIOUS_RELEASE"
+```
+
+记录 `PREVIOUS_RELEASE` 的实际路径到本次发版记录；不要依赖 SSH 会话结束后仍存在的 shell 变量。
 
 ### 执行部署
 
@@ -234,14 +250,26 @@ export COMPOSE_FILE="$RELEASE_DIR/docker-compose.staging.yml"
 bash "$RELEASE_DIR/scripts/verify.sh" "$RELEASE_DIR"
 ```
 
+`verify.sh` 检查发布文件和配置，不验证运行中服务是否健康；不要把它输出的 `deployment verified` 单独当作发版验收通过。后续命令使用 `set -euo pipefail` 或逐项检查退出码，避免分号串联掩盖失败。
+
 查看容器状态：
 
 ```Plain Text
+set -euo pipefail
 docker compose \
   --env-file "$CAUSALAGENT_CONFIG_FILE" \
   --env-file "$RELEASE_DIR/images.env" \
   -f "$RELEASE_DIR/docker-compose.staging.yml" \
-  ps --all
+  ps --all --format json | \
+  python3 -c 'import json,sys; rows=(json.loads(line) for line in sys.stdin if line.strip()); [print("{}\t{}\t{}\t{}\t{}".format(r.get("Service","?"),r.get("State","?"),r.get("Health",""),r.get("ExitCode",""),r.get("Image","?"))) for r in rows]'
+```
+
+该汇总应包含所有服务；检查完容器状态后再单独运行网关请求，确保每一步的退出状态都能被判断。
+
+检查 staging 网关的服务器本机响应；该检查不代表外网访问、登录或业务流程已验证：
+
+```Plain Text
+curl -fsS --max-time 10 -o /dev/null -w 'gateway_http=%{http_code}\n' http://127.0.0.1:8088/
 ```
 
 重点确认：
@@ -258,4 +286,30 @@ docker compose \
 
 - 外部访问、登录、任务创建、SSE 和真实模型调用正常。
 
+外部访问和业务流程只有在存在授权测试账号及明确验收步骤时才执行；否则逐项标为未验证，不要猜测账号或凭据。
+
 如果部署命令失败，不要删除发布目录，也不要执行 `down -v`。先保留错误输出。
+
+创建本次上传专用目录时，将完整绝对路径记入本次发版记录；例如 `/tmp/causalagent-release-41028097130-1`。全部部署后检查通过后，从记录中取出这一路径赋给 `UPLOAD_DIR` 再清理，不要用通配符生成待删除路径：
+
+```Plain Text
+set -euo pipefail
+: "${UPLOAD_DIR:?set the exact directory recorded for this upload}"
+test -d "$UPLOAD_DIR" && test ! -L "$UPLOAD_DIR"
+UPLOAD_DIR="$(realpath -e -- "$UPLOAD_DIR")"
+test "$(dirname -- "$UPLOAD_DIR")" = /tmp || { echo "unexpected upload directory: $UPLOAD_DIR" >&2; exit 1; }
+case "$(basename -- "$UPLOAD_DIR")" in
+  causalagent-release-?*) ;;
+  *) echo "unexpected upload directory: $UPLOAD_DIR" >&2; exit 1 ;;
+esac
+rm -rf -- "$UPLOAD_DIR"
+```
+
+发版成功结果中列出实际版本目录和当前版本入口，供成员在服务器文件管理器中打开；`current` 的实际目标以 `readlink -f` 验证。注明本次 `/tmp` 暂存目录已清理，不要将其展示为仍可访问的目录。失败时保留暂存包和日志。不要借此清理旧的 `/opt/causalagent-staging/releases` 版本目录。
+
+```Plain Text
+本次发版目录：/opt/causalagent-staging/releases/<release_id>
+当前运行版本入口：/opt/causalagent-staging/releases/current
+current 实际指向：<readlink -f 输出的版本目录>
+本次上传暂存目录：/tmp/causalagent-release-<upload-id>（发版成功后已清理）
+```
