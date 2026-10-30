@@ -8,6 +8,10 @@
 
 共享 skill 放在 `.agents/skills/<skill-name>/`，每个 skill 自带 `SKILL.md` 和它实际需要的 references、scripts 或 agents 元数据。
 
+## 当前 Skills
+
+- [`tencent-cloud-release-deploy`](.agents/skills/tencent-cloud-release-deploy/SKILL.md)：使用 SSH 将 `release.zip` 部署到 CausalAgent 腾讯云测试/预发环境，并按已确认步骤验收或回滚。
+
 ## 使用方式
 
 在 Codex 中打开本仓库可以维护和验证其中的项目级 skills。需要在其他项目中调用时，将对应 skill 安装到个人 Codex skills 目录，或使用团队统一的 skill 安装方式。SSH 私钥、密码和服务令牌由每位成员本地管理，不提交到本仓库。

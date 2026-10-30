@@ -1,0 +1,4 @@
+interface:
+  display_name: "腾讯云发版"
+  short_description: "通过 SSH 发布 release.zip 到腾讯云 Linux 并验证"
+  default_prompt: "使用 $tencent-cloud-release-deploy 检查并部署我上传的 release.zip。"
